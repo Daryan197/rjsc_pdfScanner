@@ -125,21 +125,25 @@ def load_business_database() -> Tuple[Dict[str, str], Dict[str, str], List[str],
 BUSINESS_LOOKUP, DISPLAY_NAMES, BUSINESS_KEYS, PREFIX_INDEX = load_business_database()
 
 
-def build_page_array(total_pages: int) -> List[int]:
+def build_page_array(total_pages: int, max_pages: int = 3) -> List[int]:
     """
-    PDF pages are zero-indexed:
-      pdf[0] = page 1
-      pdf[1] = page 2
-      pdf[2] = page 3
+    Skip page 1 entirely.
 
-    This scans ONLY page 2 and page 3.
+    pdf[0] = page 1 (ignored)
+    pdf[1] = page 2
+    pdf[2] = page 3
+    pdf[3] = page 4
+
+    Default scan = 3 pages (2, 3, 4).
     """
     page_array = []
-    for page_index in [1, 2]:
+    start_page = 1
+
+    for page_index in range(start_page, start_page + max_pages):
         if page_index < total_pages:
             page_array.append(page_index)
-    return page_array
 
+    return page_array
 
 def get_pdf_page_text(page) -> Tuple[str, str]:
     """
@@ -297,7 +301,7 @@ def process_pdf(pdf_path: Path, original_filename: str, max_pages: Optional[int]
         return result
     try:
         total_pages = len(pdf)
-        page_array = build_page_array(total_pages)
+        page_array = build_page_array(total_pages, 3)
         if not page_array:
             result.update(status="error", notes="PDF does not have page 2 or page 3 to scan.")
             return result
