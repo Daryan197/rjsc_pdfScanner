@@ -125,21 +125,25 @@ def load_business_database() -> Tuple[Dict[str, str], Dict[str, str], List[str],
 BUSINESS_LOOKUP, DISPLAY_NAMES, BUSINESS_KEYS, PREFIX_INDEX = load_business_database()
 
 
-def build_page_array(total_pages: int) -> List[int]:
+def build_page_array(total_pages: int, max_pages: int = 3) -> List[int]:
     """
-    PDF pages are zero-indexed:
-      pdf[0] = page 1
-      pdf[1] = page 2
-      pdf[2] = page 3
+    Skip page 1 entirely.
 
-    This scans ONLY page 2 and page 3.
+    pdf[0] = page 1 (ignored)
+    pdf[1] = page 2
+    pdf[2] = page 3
+    pdf[3] = page 4
+
+    Default scan = 3 pages (2, 3, 4).
     """
     page_array = []
-    for page_index in [1, 2]:
+    start_page = 1
+
+    for page_index in range(start_page, start_page + max_pages):
         if page_index < total_pages:
             page_array.append(page_index)
-    return page_array
 
+    return page_array
 
 def get_pdf_page_text(page) -> Tuple[str, str]:
     """
@@ -297,7 +301,7 @@ def process_pdf(pdf_path: Path, original_filename: str, max_pages: Optional[int]
         return result
     try:
         total_pages = len(pdf)
-        page_array = build_page_array(total_pages)
+        page_array = build_page_array(total_pages, 3)
         if not page_array:
             result.update(status="error", notes="PDF does not have page 2 or page 3 to scan.")
             return result
@@ -406,6 +410,77 @@ def process_job(job_id: str, files_to_process: List[dict], max_pages: Optional[i
         update_job(job_id, status="error", message=str(e))
 
 
+
+@app.route("/search_business", methods=["GET"])
+def search_business():
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify({"results": [], "message": "Enter a business name to search."})
+
+    normalized_query = normalize_name(query)
+    results = []
+    seen = set()
+    limit_value = 10
+
+    if normalized_query in BUSINESS_LOOKUP:
+        results.append({
+            "business_name": DISPLAY_NAMES.get(normalized_query, normalized_query),
+            "registry_number": BUSINESS_LOOKUP.get(normalized_query, "NOT FOUND"),
+            "match_type": "exact",
+            "match_score": 100
+        })
+        seen.add(normalized_query)
+
+    query_words = normalized_query.split()
+
+    for key in BUSINESS_KEYS:
+        if len(results) >= limit_value:
+            break
+
+        if key in seen:
+            continue
+
+        if normalized_query in key or all(word in key for word in query_words):
+            results.append({
+                "business_name": DISPLAY_NAMES.get(key, key),
+                "registry_number": BUSINESS_LOOKUP.get(key, "NOT FOUND"),
+                "match_type": "partial",
+                "match_score": ""
+            })
+            seen.add(key)
+
+    if len(results) < limit_value and len(normalized_query) >= 3:
+        choices = BUSINESS_KEYS
+
+        if query_words and query_words[0] in PREFIX_INDEX:
+            choices = PREFIX_INDEX[query_words[0]]
+
+        fuzzy_matches = process.extract(
+            normalized_query,
+            choices,
+            scorer=fuzz.WRatio,
+            limit=limit_value
+        )
+
+        for matched_key, score, _ in fuzzy_matches:
+            if len(results) >= limit_value:
+                break
+
+            if matched_key in seen:
+                continue
+
+            if score >= 75:
+                results.append({
+                    "business_name": DISPLAY_NAMES.get(matched_key, matched_key),
+                    "registry_number": BUSINESS_LOOKUP.get(matched_key, "NOT FOUND"),
+                    "match_type": "fuzzy",
+                    "match_score": round(float(score), 2)
+                })
+                seen.add(matched_key)
+
+    return jsonify({"query": query, "results": results, "count": len(results)})
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -416,6 +491,7 @@ def health():
     return jsonify({
         "status": "ok",
         "database_loaded": True,
+        "quick_lookup": True,
         "business_count": len(BUSINESS_KEYS),
         "max_upload_mb": MAX_UPLOAD_MB,
         "background_workers": BACKGROUND_WORKERS,
